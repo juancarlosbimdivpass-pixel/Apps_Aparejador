@@ -1,0 +1,6 @@
+# No se publica: notas con datos personales e instrucciones internas
+CLAUDE.md
+_instrucciones/
+versiones_anteriores/
+.DS_Store
+.git
