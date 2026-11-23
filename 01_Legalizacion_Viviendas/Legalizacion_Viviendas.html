@@ -690,6 +690,7 @@ button:hover{background:#eef1f5}
 button.pri{background:var(--pri);color:#fff;border-color:var(--pri)}
 button.pri:hover{background:var(--pri-d)}
 button.danger{color:var(--bad);border-color:#e3b9b5}
+button:disabled{opacity:.55;cursor:wait}
 header.top button{background:rgba(255,255,255,.12);color:#fff;border-color:rgba(255,255,255,.3)}
 header.top button:hover{background:rgba(255,255,255,.22)}
 nav.tabs{display:flex;gap:4px;padding:10px 16px 0;background:var(--bg);position:sticky;top:0;z-index:500;border-bottom:1px solid var(--line);overflow-x:auto}
@@ -717,7 +718,7 @@ textarea{min-height:70px;resize:vertical}
 .box.bad{background:var(--badbg);border-color:var(--bad)} .box.info{background:var(--infobg);border-color:var(--pri)}
 .box b:first-child{display:block;margin-bottom:2px}
 .maps{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.mapwrap{position:relative}
+.mapwrap{position:relative;isolation:isolate}
 .map{height:56vh;min-height:340px;border:1px solid var(--line);border-radius:8px}
 .maptag{position:absolute;z-index:450;left:8px;top:8px;background:#fff;border-radius:6px;padding:4px 6px;box-shadow:0 1px 4px rgba(0,0,0,.3);display:flex;gap:6px;align-items:center}
 .maptag select{margin:0;padding:3px 6px;width:auto}
@@ -822,13 +823,13 @@ nav.tabs .sh{display:none}
 <body>
 
 <header class="top">
-  <h1>Legalización de viviendas <small class="nover" style="font-weight:400;opacity:.6;font-size:12px">v4</small></h1>
+  <h1>Legalización de viviendas <small class="nover" style="font-weight:400;opacity:.6;font-size:12px">v5</small></h1>
   <select id="selExp" title="Expediente"></select>
   <button id="btnNuevo">Nuevo expediente</button>
   <button id="btnExport">Exportar</button>
   <button id="btnImport">Importar</button>
   <button id="btnBorrar">Eliminar</button>
-  <input type="file" id="fileImport" accept="application/json" hidden>
+  <input type="file" id="fileImport" accept=".json,application/json" hidden>
 </header>
 
 <nav class="tabs" id="tabs">
@@ -1222,26 +1223,66 @@ const KEY = "legalizacion_expedientes_v1";
 let DB = {actual:null, exp:{}};
 const uid = () => Math.random().toString(36).slice(2,9);
 const HOY = new Date();
+const arr = x => Array.isArray(x) ? x : (x ? [x] : []);   // el Catastro a veces da un objeto suelto en vez de una lista
+// fecha local (toISOString da la fecha UTC: de madrugada en verano saldría el día anterior)
+const fechaLocal = (d=new Date()) => d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+const fechaES = iso => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso||""); return m ? m[3]+"/"+m[2]+"/"+m[1] : (iso||""); };
 
 function nuevoExp(){
-  return {id:uid(), ref:"", fecha:HOY.toISOString().slice(0,10), cliente:"", contacto:"", encargo:"",
+  return {id:uid(), ref:"", fecha:fechaLocal(), cliente:"", contacto:"", encargo:"",
     p:{municipio:"", isla:"Tenerife", direccion:"", rc:"", lat:"", lon:"", superficie:"", clase:"", categoria:"", planeamiento:"", notas:"", afec:{}},
     edif:[], chk:{}, anios:ANIOS_BASE.slice()};
 }
 function nuevaEdif(tipo){
   return {id:uid(), tipo, nombre:"", descripcion:"", uso:"Vivienda", superficie:"", plantas:"", primero:"", ultimoSin:"", catastro:"", licencia:"nc", notas:""};
 }
+// Completa los campos que falten en un expediente (antiguos o importados) sin cambiar la estructura
+function normalizarExp(e){
+  if(!e || typeof e!=="object" || Array.isArray(e)) return null;
+  const b = nuevoExp();
+  if(!e.id) e.id = b.id;
+  ["ref","fecha","cliente","contacto","encargo"].forEach(k=>{ if(e[k]==null) e[k]=""; });
+  if(!e.p || typeof e.p!=="object") e.p = {};
+  for(const k in b.p) if(e.p[k]==null) e.p[k] = b.p[k];
+  if(!e.p.afec || typeof e.p.afec!=="object") e.p.afec = {};
+  e.edif = arr(e.edif).filter(x=>x && typeof x==="object").map(x=>{
+    const n = nuevaEdif(x.tipo==="existente" ? "existente" : "legalizar");
+    for(const k in n) if(x[k]==null) x[k] = n[k];
+    return x;
+  });
+  if(!e.chk || typeof e.chk!=="object") e.chk = {};
+  e.anios = arr(e.anios).map(Number).filter(y=>y>1900);
+  if(!e.anios.length) e.anios = ANIOS_BASE.slice();
+  return e;
+}
 function cargar(){
-  try{ const s = localStorage.getItem(KEY); if(s) DB = JSON.parse(s); }catch(e){}
-  if(!DB.exp || !Object.keys(DB.exp).length){ const e = nuevoExp(); DB = {actual:e.id, exp:{[e.id]:e}}; }
+  let s = null;
+  try{ s = localStorage.getItem(KEY); }catch(e){}
+  if(s){
+    try{ const d = JSON.parse(s); if(d && typeof d==="object") DB = d; }
+    catch(e){
+      // datos dañados: se apartan en otra clave para no sobrescribirlos al guardar
+      try{ localStorage.setItem(KEY+"_danado_"+Date.now(), s); }catch(_){}
+      alert("Los expedientes guardados en este navegador están dañados. Se ha guardado una copia aparte y se empieza de nuevo.");
+    }
+  }
+  if(!DB.exp || typeof DB.exp!=="object") DB.exp = {};
+  Object.keys(DB.exp).forEach(k=>{ const e = normalizarExp(DB.exp[k]); if(e){ e.id = k; DB.exp[k] = e; } else delete DB.exp[k]; });
+  if(!Object.keys(DB.exp).length){ const e = nuevoExp(); DB.exp = {[e.id]:e}; DB.actual = e.id; }
   if(!DB.exp[DB.actual]) DB.actual = Object.keys(DB.exp)[0];
   DB.tarifas = fusionar(TARIFAS_BASE, DB.tarifas);
 }
-function guardar(){ try{ localStorage.setItem(KEY, JSON.stringify(DB)); }catch(e){} }
+let avisoGuardar = false;
+function guardar(){
+  try{ localStorage.setItem(KEY, JSON.stringify(DB)); avisoGuardar = false; }
+  catch(e){
+    if(!avisoGuardar){ avisoGuardar = true; alert("No se han podido guardar los cambios en este navegador (memoria llena o navegación privada). Exporta el expediente para no perderlos."); }
+  }
+}
 const E = () => DB.exp[DB.actual];
 
 function getPath(o,path){ return path.split(".").reduce((a,k)=>a&&a[k], o); }
-function setPath(o,path,v){ const ks = path.split("."); const l = ks.pop(); const t = ks.reduce((a,k)=>a[k], o); t[l]=v; }
+function setPath(o,path,v){ const ks = path.split("."); const l = ks.pop(); const t = ks.reduce((a,k)=>(a[k] && typeof a[k]==="object") ? a[k] : (a[k]={}), o); t[l]=v; }
 
 /* ================================================================
    UI GENERAL
@@ -1287,13 +1328,23 @@ function volcarFormulario(){
   $$("[data-f]").forEach(el=>{ if(el.id==="selMun") return; const v = getPath(e, el.dataset.f); el.value = v==null?"":v; });
   poblarMunicipios(); pintarCoord();
   $$("[data-a]").forEach(el=>{ el.checked = !!e.p.afec[el.dataset.a]; });
-  actualizarCategoria();
+  actualizarCategoria(); pintarCatastro();
+}
+// Al cambiar de expediente: borrar resultados de búsqueda que eran del anterior
+function limpiarBusqueda(){
+  sugerencias(); INM.lista = []; $("#listaInm").innerHTML = ""; catMsg("");
+  ["#inCalle","#inNum","#inPol","#inPar","#inRCbus","#inCoo"].forEach(s=>{ $(s).value=""; });
+}
+function cambiarExpediente(id){
+  DB.actual = id; guardar(); pintarSelector(); limpiarBusqueda(); volcarFormulario(); pintarEdif();
+  if(mapas.L) refrescarVisor();
 }
 function actualizarCategoria(){
   const r = $("#selClase").value==="rustico";
   $("#selCat").disabled = !r; $("#selCat").parentElement.style.opacity = r?1:.5;
 }
-document.addEventListener("input", e=>{
+// Se atiende "input" y también "change": algunas versiones de Safari no lanzan "input" en casillas y desplegables
+function alEditarCampo(e){
   const el = e.target;
   if(el.dataset && el.dataset.f){
     let v = el.value; if(el.dataset.f==="p.rc"||el.dataset.f==="p.rc20") v = v.toUpperCase().replace(/\s/g,"");
@@ -1303,31 +1354,41 @@ document.addEventListener("input", e=>{
     guardar();
   }
   if(el.dataset && el.dataset.a){ E().p.afec[el.dataset.a]=el.checked; guardar(); }
-});
+}
+document.addEventListener("input", alEditarCampo);
+document.addEventListener("change", alEditarCampo);
 $("#selIsla").addEventListener("change", ()=>{ E().p.municipio=""; poblarMunicipios(); guardar(); });
 $("#selClase").addEventListener("change", ()=>{ if($("#selClase").value!=="rustico"){ E().p.categoria=""; $("#selCat").value=""; guardar(); } });
 
-$("#selExp").addEventListener("change", e=>{ DB.actual=e.target.value; guardar(); volcarFormulario(); pintarEdif(); if(mapas.L) refrescarVisor(); });
-$("#btnNuevo").onclick = ()=>{ const e=nuevoExp(); DB.exp[e.id]=e; DB.actual=e.id; guardar(); pintarSelector(); volcarFormulario(); pintarEdif(); irTab("expediente"); };
+$("#selExp").addEventListener("change", e=>cambiarExpediente(e.target.value));
+$("#btnNuevo").onclick = ()=>{ const e=nuevoExp(); DB.exp[e.id]=e; cambiarExpediente(e.id); irTab("expediente"); };
 $("#btnBorrar").onclick = ()=>{
-  if(!confirm("Eliminar este expediente. No se puede deshacer.")) return;
+  const e = E();
+  if(!confirm("Eliminar el expediente \""+(e.ref||e.cliente||"Sin título")+"\". No se puede deshacer.")) return;
   delete DB.exp[DB.actual];
-  if(!Object.keys(DB.exp).length){ const e=nuevoExp(); DB.exp[e.id]=e; }
-  DB.actual = Object.keys(DB.exp)[0]; guardar(); pintarSelector(); volcarFormulario(); pintarEdif(); irTab("expediente");
+  if(!Object.keys(DB.exp).length){ const n=nuevoExp(); DB.exp[n.id]=n; }
+  cambiarExpediente(Object.keys(DB.exp)[0]); irTab("expediente");
 };
 $("#btnExport").onclick = ()=>{
   const e = E(); const blob = new Blob([JSON.stringify(e,null,2)], {type:"application/json"});
-  const a = document.createElement("a"); a.href=URL.createObjectURL(blob);
-  a.download = (e.ref||"expediente").replace(/[^\w\-]+/g,"_")+".json"; a.click(); URL.revokeObjectURL(a.href);
+  const url = URL.createObjectURL(blob), a = document.createElement("a");
+  a.href = url; a.style.display = "none";
+  a.download = (e.ref||"expediente").normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[^\w\-]+/g,"_")+".json";
+  document.body.appendChild(a); a.click();
+  // en Safari, liberar el enlace en el acto puede cortar la descarga
+  setTimeout(()=>{ a.remove(); URL.revokeObjectURL(url); }, 5000);
 };
 $("#btnImport").onclick = ()=>$("#fileImport").click();
 $("#fileImport").onchange = ev=>{
   const f = ev.target.files[0]; if(!f) return;
   const r = new FileReader();
-  r.onload = ()=>{ try{
-      const e = JSON.parse(r.result); if(!e.p || !e.edif) throw 0;
-      e.id = uid(); DB.exp[e.id]=e; DB.actual=e.id; guardar(); pintarSelector(); volcarFormulario(); pintarEdif(); irTab("expediente");
-    }catch(_){ alert("El archivo no es un expediente válido."); } };
+  r.onload = ()=>{
+    let e = null;
+    try{ e = JSON.parse(r.result); }catch(_){}
+    if(!e || typeof e!=="object" || !e.p || typeof e.p!=="object"){ alert("El archivo no es un expediente válido."); return; }
+    e = normalizarExp(e); e.id = uid(); DB.exp[e.id] = e; cambiarExpediente(e.id); irTab("expediente");
+  };
+  r.onerror = ()=>alert("No se pudo leer el archivo.");
   r.readAsText(f); ev.target.value="";
 };
 
@@ -1343,17 +1404,20 @@ const enc = encodeURIComponent;
 function catMsg(t, tipo){ const s=$("#catStatus"); s.textContent=t; s.className="status "+(tipo||"hint"); }
 const norm = s => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toUpperCase().replace(/[^A-Z0-9 ]/g," ").replace(/\s+/g," ").trim();
 const provinciaDe = isla => ["Gran Canaria","Lanzarote","Fuerteventura"].includes(isla) ? "LAS PALMAS" : "S.C. TENERIFE";
+// Errores de conexión marcados con "red": así no se confunden con un fallo del propio programa
+function errRed(msg){ const e = new Error(msg); e.red = true; return e; }
+const MSG_LENTO = "El Catastro tarda demasiado en responder. Inténtalo de nuevo.";
 function xhrText(url){
   return new Promise((res,rej)=>{
     const x = new XMLHttpRequest(); x.open("GET",url); x.timeout = 40000;
     x.onload = ()=> (x.status>=200 && x.status<300) ? res(x.responseText) : rej(new Error("El Catastro respondió con error "+x.status+"."));
-    x.onerror = ()=> rej(new TypeError("XHR bloqueado"));
-    x.ontimeout = ()=> rej(new Error("El Catastro tarda demasiado en responder. Inténtalo de nuevo."));
+    x.onerror = ()=> rej(errRed("XHR bloqueado"));
+    x.ontimeout = ()=> rej(new Error(MSG_LENTO));
     x.send();
   });
 }
 async function httpText(url){
-  let timer; const lim = new Promise((_,rej)=>{ timer = setTimeout(()=>rej(new Error("El Catastro tarda demasiado en responder. Inténtalo de nuevo.")), 45000); });
+  let timer; const lim = new Promise((_,rej)=>{ timer = setTimeout(()=>rej(new Error(MSG_LENTO)), 45000); });
   const intento = async ()=>{
     try{
       const r = await fetch(url);                       // sin opciones: algunos entornos no admiten AbortSignal ni otras opciones
@@ -1362,17 +1426,23 @@ async function httpText(url){
     }catch(e){
       const red = e instanceof TypeError || /postMessage|cloned|Failed to fetch|NetworkError|Load failed/i.test((e&&e.message)||"");
       if(!red) throw e;
-      try{ return await xhrText(url); }catch(e2){ throw new TypeError(((e&&e.message)||"fetch")+" / "+((e2&&e2.message)||"XHR")); }
+      try{ return await xhrText(url); }
+      catch(e2){ if(!e2.red) throw e2; throw errRed(((e&&e.message)||"fetch")+" / "+((e2&&e2.message)||"XHR")); }
     }
   };
   try{ return await Promise.race([intento(), lim]); } finally{ clearTimeout(timer); }
 }
-async function getJSON(url){ return JSON.parse(await httpText(url)); }
+async function getJSON(url){
+  const t = await httpText(url);
+  try{ return JSON.parse(t); }
+  catch(e){ throw new Error("El Catastro devolvió una respuesta que no se puede leer. Puede estar en mantenimiento: inténtalo en unos minutos."); }
+}
 function msgError(err){
-  if(err && err.name==="TypeError") return "No se pudo conectar con el Catastro ("+(err.message||"sin detalle")+"). Si estás en la vista previa de Claude, abre el archivo directamente en Safari o Chrome. Pulsa \"Probar conexión\" para comprobarlo.";
+  if(err && err.red) return "No se pudo conectar con el Catastro ("+(err.message||"sin detalle")+"). Comprueba la conexión a internet; si estás en la vista previa de Claude, abre el archivo directamente en Safari o Chrome. Pulsa \"Probar conexión\" para comprobarlo.";
+  if(err && /TypeError|ReferenceError|RangeError/.test(err.name||"")) return "El Catastro ha devuelto una respuesta inesperada ("+err.message+"). Inténtalo de nuevo en unos minutos.";
   return (err && err.message) || "Error desconocido al consultar el Catastro.";
 }
-function errCat(c){ if(!c||!c.lerr) return null; const l = Array.isArray(c.lerr) ? c.lerr : (c.lerr.err||[]); return l.length ? {cod:l[0].cod, des:l[0].des} : null; }
+function errCat(c){ if(!c||!c.lerr) return null; const l = Array.isArray(c.lerr) ? c.lerr : arr(c.lerr.err); return l.length ? {cod:l[0].cod, des:String(l[0].des||"")} : null; }
 function findLdt(o){ if(!o||typeof o!=="object") return ""; if(typeof o.ldt==="string") return o.ldt; for(const k in o){ const r=findLdt(o[k]); if(r) return r; } return ""; }
 
 function sugerencias(titulo, items){
@@ -1380,10 +1450,21 @@ function sugerencias(titulo, items){
   if(!items||!items.length) return;
   const t = document.createElement("div"); t.className="hint"; t.style.margin="8px 0 4px"; t.textContent=titulo; c.appendChild(t);
   const w = document.createElement("div"); w.className="sug";
-  items.forEach(it=>{ const b=document.createElement("button"); b.textContent=it.txt; b.onclick=()=>{ c.innerHTML=""; it.fn(); }; w.appendChild(b); });
+  items.forEach(it=>{ const b=document.createElement("button"); b.textContent=it.txt; b.onclick=unaVez(async ()=>{ c.innerHTML=""; await it.fn(); }); w.appendChild(b); });
   c.appendChild(w);
 }
 const fallo = e => catMsg(msgError(e),"err");
+// Evita lanzar dos búsquedas a la vez (doble toque en el móvil): bloquea los botones mientras dura
+let ocupado = false;
+function unaVez(fn){
+  return async (...a)=>{
+    if(ocupado) return;
+    ocupado = true; const bs = $$(".modo button, #btnTestCat, #btnCatPunto"); bs.forEach(b=>b.disabled=true);
+    try{ await fn(...a); }
+    catch(err){ fallo(err); }
+    finally{ ocupado = false; bs.forEach(b=>b.disabled=false); }
+  };
+}
 
 /* ---------- municipio y callejero ---------- */
 async function munCat(){
@@ -1391,7 +1472,9 @@ async function munCat(){
   if(!p.municipio) throw new Error("Primero elige la isla y el municipio.");
   if(!cache.mun[prov]){
     const d = await getJSON(CAT_JSON+"ObtenerMunicipios?Provincia="+enc(prov)+"&Municipio=");
-    cache.mun[prov] = d.consulta_municipieroResult.municipiero.muni.map(m=>m.nm);
+    const l = arr((((d||{}).consulta_municipieroResult||{}).municipiero||{}).muni).map(m=>m&&m.nm).filter(Boolean);
+    if(!l.length) throw new Error("El Catastro no ha devuelto la lista de municipios. Inténtalo de nuevo en unos minutos.");
+    cache.mun[prov] = l;
   }
   const list = cache.mun[prov], n = norm(p.municipio), sa = s=>s.replace(/^(EL|LA|LOS|LAS) /,"");
   const hit = list.find(x=>norm(x)===n) || list.find(x=>sa(norm(x))===sa(n)) || list.find(x=>norm(x).startsWith(n)||n.startsWith(norm(x)));
@@ -1402,8 +1485,10 @@ async function callejero(prov, mun){
   const k = prov+"|"+mun;
   if(!cache.calles[k]){
     const d = await getJSON(CAT_JSON+"ObtenerCallejero?Provincia="+enc(prov)+"&Municipio="+enc(mun)+"&TipoVia=&NombreVia=");
-    const arr = (((d.consulta_callejeroResult||{}).callejero||{}).calle)||[];
-    cache.calles[k] = arr.map(c=>{ const parts=(c.dir.nv||"").split(/\s{2}en\s{2}/); return {tv:c.dir.tv, nombre:parts[0].trim(), loc:(parts[1]||"").trim(), n:norm(parts[0])}; });
+    const l = arr((((d||{}).consulta_callejeroResult||{}).callejero||{}).calle).filter(c=>c&&c.dir&&c.dir.nv)
+      .map(c=>{ const parts=String(c.dir.nv).split(/\s{2}en\s{2}/); return {tv:c.dir.tv||"", nombre:parts[0].trim(), loc:(parts[1]||"").trim(), n:norm(parts[0])}; });
+    if(!l.length) throw new Error("El Catastro no ha devuelto el callejero de "+mun+". Inténtalo de nuevo en unos minutos.");
+    cache.calles[k] = l;   // solo se guarda si llegó algo, para poder reintentar
   }
   return cache.calles[k];
 }
@@ -1457,12 +1542,12 @@ function inmueblesDe(d){
     });
   };
   if(d && d.bico && d.bico.bi){ const bi=d.bico.bi; push((bi.idbi||{}).rc, bi.dt, bi.debi); }
-  (((d||{}).lrcdnp||{}).rcdnp||[]).forEach(x=>push(x.rc, x.dt, x.debi));
+  arr(((d||{}).lrcdnp||{}).rcdnp).forEach(x=>{ if(x) push(x.rc, x.dt, x.debi); });
   return out;
 }
 function numerosCercanos(d, num){
   const vistos = new Set(), n0 = parseInt(num,10);
-  return (((d.numerero||{}).nump)||[]).map(x=>({n:x.num&&x.num.pnp, rc14:(x.pc?x.pc.pc1+x.pc.pc2:null)}))
+  return arr((d.numerero||{}).nump).filter(Boolean).map(x=>({n:x.num&&x.num.pnp, rc14:(x.pc?x.pc.pc1+x.pc.pc2:null)}))
     .filter(x=>x.rc14 && x.n && x.n!=="0").filter(x=>{ if(vistos.has(x.n)) return false; vistos.add(x.n); return true; })
     .sort((a,b)=>Math.abs(a.n-n0)-Math.abs(b.n-n0)).slice(0,8);
 }
@@ -1546,8 +1631,9 @@ async function resolver(inms){
   await seleccionarParcela(parcelas[0], inms);
 }
 async function seleccionarParcela(rc14, inms, rc20){
+  const e0 = E();
   const det = await aplicarRC(rc14);
-  if(!det) return;
+  if(!det || E()!==e0) return;   // si mientras tanto se cambió de expediente, no se mezclan datos
   mostrarInmuebles(inms && inms.length ? inms : det.inms, rc20);
 }
 async function cargarGeom(rc){
@@ -1566,25 +1652,36 @@ async function detalleRC(rc){
   const inms = inmueblesDe(d), b = d.bico;
   if(!b) return {n:inms.length, inms, ldt:findLdt(d) || (inms[0] ? [inms[0].via, inms[0].rus].filter(Boolean).join(" ") : ""), err:errCat(d)};
   const bi = b.bi||{}, de = bi.debi||{}, fi = b.finca||{};
-  const cons = (b.lcons||[]).map(c=>({lcd:c.lcd, sup:(c.dfcons||{}).stl, tipo:(c.dvcons||{}).dtip}));
+  const cons = arr(b.lcons).filter(Boolean).map(c=>({lcd:c.lcd, sup:(c.dfcons||{}).stl, tipo:(c.dvcons||{}).dtip}));
   return {n:1, inms, ldt:bi.ldt||fi.ldt||"", uso:de.luso, sfc:de.sfc, ant:de.ant, ss:(fi.dff||{}).ss, cons, sede:(fi.infgraf||{}).igraf};
 }
 async function aplicarRC(rc){
-  rc = rc.slice(0,14).toUpperCase(); const p = E().p;
+  rc = rc.slice(0,14).toUpperCase(); const e0 = E(), p = e0.p;
   catMsg("Parcela encontrada. Cargando datos y contorno...");
-  let g = null, det = null;
-  try{ g = await cargarGeom(rc); }catch(e){ if(e.name==="TypeError") throw e; }
-  try{ det = await detalleRC(rc); }catch(e){ if(e.name==="TypeError") throw e; }
-  if((!g || !g.rings.length) && (!det || !det.n)){ catMsg("No encuentro esa referencia catastral"+(det&&det.err?" ("+det.err.des.toLowerCase()+")":"")+". Compruébala.","warn"); return null; }
-  const prevLdt = p.catastro && p.catastro.ldt;
-  if(p.rc && p.rc!==rc){ p.rc20=""; p.inmueble=null; }
+  let g = null, det = null, err = null;
+  try{ g = await cargarGeom(rc); }catch(e){ if(e.red) throw e; err = e; }
+  try{ det = await detalleRC(rc); }catch(e){ if(e.red) throw e; err = err || e; }
+  const hayG = !!(g && g.rings.length), hayD = !!(det && det.n);
+  if(!hayG && !hayD){
+    if(err) throw err;   // fallo del servicio (lentitud, error 500...): no decir que la referencia no existe
+    catMsg("No encuentro esa referencia catastral"+(det&&det.err&&det.err.des?" ("+det.err.des.toLowerCase()+")":"")+". Compruébala.","warn"); return null;
+  }
+  if(p.rc && p.rc!==rc){
+    // parcela distinta: se borran los datos de la anterior para que no se mezclen
+    p.rc20=""; p.inmueble=null; p.catastro=null; p.direccion=""; p.superficie="";
+  }
   p.rc = rc;
-  p.geom = g && g.rings.length ? g.rings : null;
-  if(det){ p.catastro = {...det}; delete p.catastro.inms; p.direccion = (det.ldt||"").replace(/\s+/g," ").trim() || p.direccion; }
+  p.geom = hayG ? g.rings : null;
+  if(det){ p.catastro = {...det}; delete p.catastro.inms; const ldt = String(det.ldt||"").replace(/\s+/g," ").trim(); if(ldt) p.direccion = ldt; }
+  else p.catastro = {n:0};
   const sup = (det && det.ss) || (g && g.area); if(sup) p.superficie = String(sup);
-  if(p.geom){ const pts = p.geom[0]; ponerCoord(pts.reduce((s,q)=>s+q[0],0)/pts.length, pts.reduce((s,q)=>s+q[1],0)/pts.length); }
-  guardar(); volcarFormulario(); pintarCatastro();
-  if(mapas.L) dibujarParcela(true);
+  if(p.geom){
+    const pts = p.geom[0];
+    p.lat = (pts.reduce((s,q)=>s+q[0],0)/pts.length).toFixed(6);
+    p.lon = (pts.reduce((s,q)=>s+q[1],0)/pts.length).toFixed(6);
+  }
+  guardar();
+  if(E()===e0){ volcarFormulario(); actualizarMarcador(); if(mapas.L) dibujarParcela(true); }
   catMsg(p.geom ? "Parcela "+rc+" localizada." : "Parcela "+rc+" localizada, pero no se pudo cargar su contorno.", "ok");
   return det || {n:0, inms:[]};
 }
@@ -1649,8 +1746,13 @@ function pintarCatastro(){
 /* ---------- coordenadas y diagnóstico ---------- */
 function ponerCoord(lat,lon){
   const p = E().p; p.lat = (+lat).toFixed(6); p.lon = (+lon).toFixed(6);
-  $("#inLat").value=p.lat; $("#inLon").value=p.lon; guardar(); pintarCoord();
-  if(mapas.marker) mapas.marker.forEach(m=>{ m.setLatLng([lat,lon]); m.setStyle({opacity:1}); });
+  $("#inLat").value=p.lat; $("#inLon").value=p.lon; guardar(); pintarCoord(); actualizarMarcador();
+}
+// El marcador del visor sigue siempre las coordenadas del expediente actual (y se oculta si no hay)
+function actualizarMarcador(){
+  if(!mapas.marker) return;
+  const p = E().p, hay = !!(p.lat && p.lon);
+  mapas.marker.forEach(m=>{ if(hay) m.setLatLng([+p.lat,+p.lon]); m.setStyle({opacity: hay?1:0}); });
 }
 async function coordARC(lat,lon){
   const x = new DOMParser().parseFromString(await httpText(OVC+"Consulta_RCCOOR?SRS=EPSG:4326&Coordenada_X="+lon+"&Coordenada_Y="+lat),"text/xml");
@@ -1685,12 +1787,16 @@ async function buscarCoo(txt){
   sugerencias(); $("#listaInm").innerHTML="";
   const c = leerCoordenadas(typeof txt==="string" ? txt : $("#inCoo").value);
   if(!c || !isFinite(c.lat) || !isFinite(c.lon)){ catMsg("No reconozco las coordenadas. Pega el texto tal como lo copias de Google Maps.","warn"); return; }
-  if(c.lat<27||c.lat>29.6||c.lon<-18.4||c.lon>-13.2){ catMsg("Ese punto queda fuera de Canarias ("+c.lat.toFixed(5)+", "+c.lon.toFixed(5)+"). Revisa las coordenadas.","warn"); return; }
+  const enCanarias = (la,lo)=> la>=27 && la<=29.6 && lo>=-18.4 && lo<=-13.2;
+  if(!enCanarias(c.lat,c.lon) && enCanarias(c.lon,c.lat)){ const t=c.lat; c.lat=c.lon; c.lon=t; }   // pegadas al revés (longitud, latitud)
+  else if(!enCanarias(c.lat,c.lon) && enCanarias(c.lat,-c.lon)) c.lon = -c.lon;                      // sin el signo menos de la longitud
+  if(!enCanarias(c.lat,c.lon)){ catMsg("Ese punto queda fuera de Canarias ("+c.lat.toFixed(5)+", "+c.lon.toFixed(5)+"). Revisa las coordenadas.","warn"); return; }
   catMsg("Buscando la parcela en ese punto...");
+  const e0 = E();
   try{
     const rc = await coordARC(c.lat.toFixed(7), c.lon.toFixed(7));
     await seleccionarParcela(rc);
-    const p=E().p; p.lat=c.lat.toFixed(6); p.lon=c.lon.toFixed(6); guardar(); pintarCoord();
+    if(E()===e0) ponerCoord(c.lat, c.lon);   // se guarda el punto exacto pegado, no el centro de la parcela
   }catch(err){ fallo(err); }
 }
 async function probarConexion(){
@@ -1710,19 +1816,23 @@ $("#seg").addEventListener("click", e=>{
   $$(".modo").forEach(m=>m.classList.toggle("on", m.id==="modo-"+b.dataset.m));
   sugerencias(); catMsg("");
 });
-$("#btnBuscarDir").onclick = buscarDireccion;
-$("#btnBuscarPol").onclick = buscarPoligono;
-$("#btnBuscarRC").onclick = buscarRC;
-$("#btnBuscarCoo").onclick = ()=>buscarCoo();
-(function(){ const el=$("#inCoord"); let t=null;
-  const lanzar=()=>{ const v=el.value.trim(); if(!v) return; if(!leerCoordenadas(v)){ catMsg("No reconozco las coordenadas. Pega el texto tal como lo copias de Google Maps.","warn"); return; } buscarCoo(v); };
+const bDir = unaVez(buscarDireccion), bPol = unaVez(buscarPoligono), bRC = unaVez(buscarRC), bCoo = unaVez(buscarCoo);
+$("#btnBuscarDir").onclick = ()=>bDir();
+$("#btnBuscarPol").onclick = ()=>bPol();
+$("#btnBuscarRC").onclick = ()=>bRC();
+$("#btnBuscarCoo").onclick = ()=>bCoo();
+(function(){ const el=$("#inCoord"); let t=null, ultimo="";
+  const buscar = unaVez(buscarCoo);
+  // "ultimo" evita repetir la misma búsqueda al pegar y luego salir del campo (pegar + change)
+  const lanzar=()=>{ const v=el.value.trim(); if(!v || v===ultimo) return; if(!leerCoordenadas(v)){ catMsg("No reconozco las coordenadas. Pega el texto tal como lo copias de Google Maps.","warn"); return; } ultimo=v; buscar(v); };
+  el.addEventListener("focus",()=>{ ultimo=""; });
   el.addEventListener("paste",()=>{ clearTimeout(t); t=setTimeout(lanzar,50); });
   el.addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); lanzar(); } });
   el.addEventListener("change",lanzar);
 })();
-$("#inCoo").addEventListener("keydown",e=>{ if(e.key==="Enter") buscarCoo(); });
-$("#btnTestCat").onclick = probarConexion;
-[["#inCalle",buscarDireccion],["#inNum",buscarDireccion],["#inPol",buscarPoligono],["#inPar",buscarPoligono],["#inRCbus",buscarRC]].forEach(([s,f])=>$(s).addEventListener("keydown", e=>{ if(e.key==="Enter") f(); }));
+$("#inCoo").addEventListener("keydown",e=>{ if(e.key==="Enter") bCoo(); });
+$("#btnTestCat").onclick = unaVez(probarConexion);
+[["#inCalle",bDir],["#inNum",bDir],["#inPol",bPol],["#inPar",bPol],["#inRCbus",bRC]].forEach(([s,f])=>$(s).addEventListener("keydown", e=>{ if(e.key==="Enter") f(); }));
 
 /* ================================================================
    VISOR
@@ -1763,15 +1873,16 @@ function iniciarVisor(){
     llenarAnios(); ponerOrto("L"); ponerOrto("R");
   } else { llenarAnios(); ponerOrto("L"); ponerOrto("R"); }
   setTimeout(()=>{ mapas.L.invalidateSize(); mapas.R.invalidateSize(); },100);
-  const p = E().p; if(p.lat&&p.lon) mapas.marker.forEach(m=>{ m.setLatLng([+p.lat,+p.lon]); m.setStyle({opacity:1}); });
+  const p = E().p; actualizarMarcador();
   dibujarParcela(!mapas.fitted); if(p.geom&&p.geom.length) mapas.fitted=true;
 }
 function ponerOrto(lado){
-  const m = mapas[lado], sel = $("#year"+lado).value;
+  const m = mapas[lado], sel = $("#year"+lado).value || "actual";
+  // si el año no cambia no se vuelve a cargar la capa (ahorra datos en el móvil)
+  if(mapas["orto"+lado] && mapas["anio"+lado]===sel) return;
   if(mapas["orto"+lado]) m.removeLayer(mapas["orto"+lado]);
-  mapas["orto"+lado] = capaOrto(sel==="actual"?"actual":+sel).addTo(m);
-  if(mapas.base) {}
-  // las ortofotos quedan sobre el mapa base, bajo el marcador
+  mapas["orto"+lado] = capaOrto(sel==="actual"?"actual":+sel).addTo(m);   // sobre el mapa base, bajo el marcador
+  mapas["anio"+lado] = sel;
 }
 function aplicarCatastro(){
   mapas.cat.forEach(l=>{ l.remove(); }); mapas.cat=[];
@@ -1788,17 +1899,22 @@ function dibujarParcela(fit){
   if(fit) mapas.L.fitBounds(mapas.poly[0].getBounds().pad(0.5),{maxZoom:20});
 }
 function centrar(){ const p=E().p; if(!mapas.L) return; if(p.geom&&p.geom.length){ dibujarParcela(true); return; } if(p.lat&&p.lon) mapas.L.setView([+p.lat,+p.lon],19); }
-function refrescarVisor(){ llenarAnios(); ponerOrto("L"); ponerOrto("R"); mapas.fitted=false; centrar(); }
+function refrescarVisor(){
+  llenarAnios(); ponerOrto("L"); ponerOrto("R");
+  dibujarParcela(false);   // quita el contorno del expediente anterior
+  actualizarMarcador(); $("#visStatus").textContent="";
+  mapas.fitted=false; centrar(); if(E().p.geom&&E().p.geom.length) mapas.fitted=true;
+}
 $("#yearL").onchange = ()=>ponerOrto("L");
 $("#yearR").onchange = ()=>ponerOrto("R");
 $("#chkCat").onchange = aplicarCatastro;
 $("#btnCentrar").onclick = ()=>{ if(!(E().p.lat&&E().p.lon)) $("#visStatus").textContent="Aún no hay coordenadas; haz clic en el mapa."; else centrar(); };
-$("#btnCatPunto").onclick = async ()=>{
+$("#btnCatPunto").onclick = unaVez(async ()=>{
   const p=E().p; if(!p.lat||!p.lon){ $("#visStatus").textContent="Primero fija un punto con un clic."; return; }
   $("#visStatus").textContent="Consultando Catastro...";
   try{ const rc = await coordARC(p.lat,p.lon); await seleccionarParcela(rc); $("#visStatus").textContent="Referencia catastral de la parcela: "+rc; }
   catch(err){ $("#visStatus").textContent = msgError(err); }
-};
+});
 $("#btnYearExtra").onclick = ()=>{
   const y = parseInt($("#yearExtra").value,10); if(!y||y<1990||y>2040) return;
   const e=E(); if(!e.anios.includes(y)) e.anios.push(y); guardar(); llenarAnios(); $("#yearExtra").value="";
@@ -1835,8 +1951,11 @@ function analizar(ed, p){
   if(prim<=limiteSeguro){ r.estado="cumple"; }
   else if(prim===limiteSeguro+1){ r.estado="limite"; }
   else { r.estado="no_cumple"; }
-  if(sin && sin>=prim) r.mensajes.push("El último año sin edificación no puede ser posterior al primero en que aparece.");
-  const intervalo = sin ? "terminada entre "+(sin)+" y "+prim : "terminada en "+prim+" o antes";
+  const sinValido = sin && sin<prim;
+  if(sin && !sinValido){ r.mensajes.push("Revisa las fechas: el último año en que NO aparece debe ser anterior al primero en que aparece."); }
+  const intervalo = sinValido ? "terminada entre "+sin+" y "+prim : "terminada en "+prim+" o antes";
+  const cat = parseInt(ed.catastro,10);
+  if(cat>1800 && cat<prim) r.mensajes.push("El Catastro la da de alta en "+cat+", antes de la primera ortofoto en que aparece: puede servir como indicio adicional de antigüedad.");
   if(prot.ambiental || enp){
     r.via="C"; r.clase="bad"; r.titulo="Suelo o afección protegida: la antigüedad no basta";
     r.mensajes.push("Obra "+intervalo+". En suelo rústico de protección ambiental, en dominio público o en espacio protegido pueden adoptarse medidas de restablecimiento aunque haya pasado el plazo (art. 361.5, comprobar supuesto concreto).");
@@ -1866,13 +1985,13 @@ function pintarEdif(){
     d.innerHTML = `
       <header>
         <strong>${ed.tipo==="legalizar"?"Edificación a legalizar":"Edificación existente con título"} ${i+1}</strong>
-        <span class="pill ${a.clase}">${esc(a.titulo)}</span>
+        <span class="pill ${a.clase}" data-r="pill">${esc(a.titulo)}</span>
         <button data-act="ver">Ver en el visor</button>
         <button class="danger" data-act="del">Quitar</button>
       </header>
       <div class="grid">
         <div><label>Nombre<input data-e="nombre" value="${esc(ed.nombre)}" placeholder="Ej.: Vivienda principal"></label></div>
-        <div><label>Uso<select data-e="uso">${USOS.map(u=>`<option ${u===ed.uso?"selected":""}>${u}</option>`).join("")}</select></label></div>
+        <div><label>Uso<select data-e="uso">${(USOS.includes(ed.uso)?USOS:[...USOS,ed.uso]).map(u=>`<option ${u===ed.uso?"selected":""}>${esc(u)}</option>`).join("")}</select></label></div>
         <div><label>Superficie construida (m2)<input type="number" min="0" data-e="superficie" value="${esc(ed.superficie)}"></label></div>
         <div><label>Plantas<input type="number" min="0" data-e="plantas" value="${esc(ed.plantas)}"></label></div>
         <div class="wide"><label>Descripción breve (qué es y qué se ha hecho)<textarea data-e="descripcion" placeholder="Ej.: Vivienda de una planta con porche y piscina; ampliada con un cuarto de aperos al fondo.">${esc(ed.descripcion)}</textarea></label></div>
@@ -1886,11 +2005,19 @@ function pintarEdif(){
           <option value="si" ${ed.licencia==="si"?"selected":""}>Sí, pero no se ajusta</option></select></label></div>` : ""}
         <div class="wide"><label>Notas<textarea data-e="notas">${esc(ed.notas)}</textarea></label></div>
       </div>
-      <div class="tags" style="margin-top:8px">${tg.length?"<span class='hint'>Detectado en la descripción:</span> "+tg.map(t=>`<span>${esc(t.label)}</span>`).join(""):"<span class='hint'>Escribe la descripción y se detectarán los elementos (piscina, aljibe, ampliación, aperos...).</span>"}</div>
-      <div class="box ${a.clase}" style="margin-top:8px"><b>${esc(a.titulo)}</b>${a.mensajes.map(m=>"<div>"+esc(m)+"</div>").join("")}${a.via?`<div style="margin-top:4px"><span class="pill info">${esc(NOMVIA[a.via])}</span></div>`:""}</div>`;
+      <div class="tags" style="margin-top:8px" data-r="tags">${htmlTags(tg)}</div>
+      <div class="box ${a.clase}" style="margin-top:8px" data-r="box">${htmlAnalisis(a)}</div>`;
+    // Se guarda al escribir y solo se actualiza el resultado, sin redibujar los campos:
+    // así no se pierde el foco ni se cierra el teclado del móvil, y no se pierde lo escrito si se cierra la app
+    const actualizar = ()=>{
+      const a2 = analizar(ed, e.p);
+      const pill = d.querySelector("[data-r=pill]"); pill.className = "pill "+a2.clase; pill.textContent = a2.titulo;
+      d.querySelector("[data-r=tags]").innerHTML = htmlTags(etiquetas(ed));
+      const box = d.querySelector("[data-r=box]"); box.className = "box "+a2.clase; box.innerHTML = htmlAnalisis(a2);
+    };
     d.querySelectorAll("[data-e]").forEach(el=>{
-      const ev = el.tagName==="SELECT" ? "change" : "change";
-      el.addEventListener(ev, ()=>{ ed[el.dataset.e]=el.value; guardar(); pintarEdif(); });
+      const fn = ()=>{ if(ed[el.dataset.e]===el.value) return; ed[el.dataset.e]=el.value; guardar(); actualizar(); };
+      el.addEventListener("input", fn); el.addEventListener("change", fn);
     });
     d.querySelector("[data-act=del]").onclick = ()=>{ if(confirm("Quitar esta edificación.")){ e.edif.splice(i,1); guardar(); pintarEdif(); } };
     d.querySelector("[data-act=ver]").onclick = ()=>{
@@ -1903,8 +2030,17 @@ function pintarEdif(){
     cont.appendChild(d);
   });
 }
+function htmlTags(tg){
+  return tg.length ? "<span class='hint'>Detectado en la descripción:</span> "+tg.map(t=>`<span>${esc(t.label)}</span>`).join("")
+    : "<span class='hint'>Escribe la descripción y se detectarán los elementos (piscina, aljibe, ampliación, aperos...).</span>";
+}
+function htmlAnalisis(a){
+  return `<b>${esc(a.titulo)}</b>${a.mensajes.map(m=>"<div>"+esc(m)+"</div>").join("")}${a.via?`<div style="margin-top:4px"><span class="pill info">${esc(NOMVIA[a.via])}</span></div>`:""}`;
+}
 function opcionesAnio(e,sel){
-  const ys = (e.anios||ANIOS_BASE).slice().sort((a,b)=>a-b);
+  const ys = (e.anios||ANIOS_BASE).slice();
+  const y = parseInt(sel,10); if(y && !ys.includes(y)) ys.push(y);   // conserva un año guardado que ya no esté en la lista
+  ys.sort((a,b)=>a-b);
   return '<option value="">No consta</option>' + ys.map(y=>`<option value="${y}" ${String(y)===String(sel)?"selected":""}>${y}</option>`).join("");
 }
 $("#btnAddLeg").onclick = ()=>{ E().edif.push(nuevaEdif("legalizar")); guardar(); pintarEdif(); };
@@ -1936,13 +2072,13 @@ function fila(d){
 function pintarInforme(){
   const e = E(), p = e.p, R = recopilar();
   const cat = {rustico:"Suelo rústico",urbano:"Suelo urbano",urbanizable:"Suelo urbanizable","":"Sin determinar"}[p.clase||""];
-  const catTxt = $("#selCat").querySelector(`option[value="${p.categoria}"]`);
+  const catTxt = Array.from($("#selCat").options).find(o=>o.value===p.categoria);
   const afecTxt = Object.keys(DOCS_AFEC).filter(k=>p.afec[k]).map(k=>({enp:"ENP o Red Natura",costas:"Costas",carreteras:"Carreteras",aguas:"Aguas y barrancos",patrimonio:"Patrimonio",riesgos:"Riesgos",demanial:"Demanial"}[k])).join(", ") || "Ninguna marcada";
   let h = `
     <div class="card"><h2>${esc(e.ref||"Expediente sin referencia")}</h2>
       <table class="t">
         <tr><th>Cliente</th><td>${esc(e.cliente)||"-"} ${e.contacto?"("+esc(e.contacto)+")":""}</td></tr>
-        <tr><th>Fecha del encargo</th><td>${esc(e.fecha)||"-"}</td></tr>
+        <tr><th>Fecha del encargo</th><td>${esc(fechaES(e.fecha))||"-"}</td></tr>
         <tr><th>Encargo</th><td>${esc(e.encargo)||"-"}</td></tr>
         <tr><th>Ubicación</th><td>${esc(p.direccion)||"-"}, ${esc(p.municipio)||"-"} (${esc(p.isla)})</td></tr>
         <tr><th>Referencia catastral (parcela)</th><td>${esc(p.rc)||"-"}</td></tr>
@@ -1990,7 +2126,7 @@ function presDe(e){ e.pres = e.pres || {}; e.pres.over = e.pres.over || {}; e.pr
 
 function calcularPresupuesto(e){
   const T = DB.tarifas, P = presDe(e), L = [], avisos = [];
-  const eds = e.edif.filter(x=>x.tipo==="legalizar").map(ed=>({ed, a:analizar(ed,e.p), tg:etiquetas(ed), m2:num(ed.superficie), coste:T.coste[ed.uso]||T.coste["Otro"]||0}));
+  const eds = e.edif.filter(x=>x.tipo==="legalizar").map(ed=>({ed, a:analizar(ed,e.p), tg:etiquetas(ed), m2:num(ed.superficie), coste:(ed.uso in T.coste) ? num(T.coste[ed.uso]) : num(T.coste["Otro"])}));
   let pem = 0;
   const add = (k,grupo,concepto,ud,cant,precio,min)=>{ L.push({k,grupo,concepto,ud,cant,precio,min:min||0,auto:Math.max(cant*precio,min||0)}); };
   const h = T.hon, t = T.ter;
@@ -2023,8 +2159,7 @@ function calcularPresupuesto(e){
     if(A.length) add("t:notaria","ter",t.notaria.t,t.notaria.ud,1,t.notaria.p);
     if(B.length){
       pem = B.reduce((s,x)=>s+x.m2*x.coste,0);
-      const pr = L.find(l=>l.k==="b:proyecto");
-      if(t.visado.p>0 && pr) add("t:visado","ter","Visado colegial ("+t.visado.p+"% sobre honorarios del proyecto)","ud",1,pr.auto*t.visado.p/100);
+      if(t.visado.p>0 && L.some(l=>l.k==="b:proyecto")) add("t:visado","ter","Visado colegial ("+t.visado.p+"% sobre honorarios del proyecto)","ud",1,0);   // importe: más abajo
       if(pem>0){
         add("t:tasa","ter","Tasa municipal de licencia ("+t.tasa.p+"% sobre PEM estimado de "+eur(pem)+")","ud",1,pem*t.tasa.p/100);
         add("t:icio","ter","ICIO ("+t.icio.p+"% sobre PEM estimado)","ud",1,pem*t.icio.p/100);
@@ -2033,13 +2168,18 @@ function calcularPresupuesto(e){
     }
   }
   P.extra.forEach(x=>L.push({k:"x:"+x.id, grupo:x.grupo, concepto:x.concepto, ud:"ud", cant:x.cant, precio:x.precio, min:0, auto:x.cant*x.precio, extra:true, id:x.id}));
-  L.forEach(l=>{
+  // cambios manuales; el mínimo de la tarifa se respeta también al cambiar la cantidad
+  const aplicar = l=>{
     const o = P.over[l.k]||{};
-    l.cant = o.cant!=null ? o.cant : l.cant;
-    l.precio = o.precio!=null ? o.precio : l.precio;
-    l.off = !!o.off;
-    l.imp = (o.cant!=null || o.precio!=null || l.extra) ? l.cant*l.precio : l.auto;
-  });
+    if(o.cant!=null) l.cant = o.cant;
+    if(o.precio!=null) l.precio = o.precio;
+    l.off = !!o.off; l.mod = o.cant!=null || o.precio!=null;
+    l.imp = Math.max(l.cant*l.precio, l.min||0);
+  };
+  L.forEach(aplicar);
+  // el visado sale de los honorarios del proyecto tal como quedan (con cambios manuales, o cero si se ha quitado)
+  const vis = L.find(l=>l.k==="t:visado"), pr = L.find(l=>l.k==="b:proyecto");
+  if(vis && pr){ vis.precio = pr.off ? 0 : pr.imp*num(t.visado.p)/100; aplicar(vis); }
   const sum = g => L.filter(l=>l.grupo===g && !l.off).reduce((s,l)=>s+l.imp,0);
   const hon = sum("hon"), ter = sum("ter"), obra = sum("obra"), igic = hon*T.igic/100, total = hon+igic+ter;
   return {lineas:L, avisos, hon, igic, ter, obra, total, min:total*(1-T.margen/100), max:total*(1+T.margen/100), pem, nEd:eds.length};
@@ -2053,7 +2193,7 @@ function filaPres(l){
     <td class="hint" style="width:96px">${esc(l.ud)}</td>
     <td style="width:104px"><input type="number" step="any" min="0" data-pk="${esc(l.k)}" data-pf="precio" value="${+(+l.precio).toFixed(2)}" style="margin:0"></td>
     <td style="width:110px;text-align:right"><b>${eur(l.imp)}</b></td>
-    <td style="width:34px">${l.extra?`<button data-pdel="${esc(l.id)}" title="Quitar">x</button>`:""}</td></tr>`;
+    <td style="width:34px">${l.extra?`<button data-pdel="${esc(l.id)}" title="Quitar">x</button>`:(l.mod?`<button data-preset="${esc(l.k)}" title="Volver al valor calculado">&#8634;</button>`:"")}</td></tr>`;
 }
 function tablaGrupo(titulo, grupo, R, nota){
   const ls = R.lineas.filter(l=>l.grupo===grupo);
@@ -2065,12 +2205,13 @@ function inputT(path, etiqueta, ud){
   const v = getPath(DB.tarifas, path);
   return `<div><label>${esc(etiqueta)}${ud?` (${esc(ud)})`:""}<input type="number" step="any" min="0" data-tp="${path}" value="${v}"></label></div>`;
 }
+let tarifasAbiertas = false;
 function panelTarifas(){
   const T = DB.tarifas;
   const hon = Object.entries(T.hon).map(([k,x])=>inputT("hon."+k+".p", x.t, x.ud==="ud"?"EUR":"EUR por "+x.ud) + (x.min!=null?inputT("hon."+k+".min", "Mínimo: "+x.t, "EUR"):"")).join("");
   const ter = Object.entries(T.ter).map(([k,x])=>inputT("ter."+k+".p", x.t, x.ud==="%"?"%":"EUR")).join("");
   const co = Object.keys(T.coste).map(k=>inputT("coste."+k, "Coste de construcción: "+k, "EUR por m2")).join("");
-  return `<details class="card noprint"><summary><b>Tarifas y criterios</b> (se guardan y se usan en todos los expedientes)</summary>
+  return `<details class="card noprint" id="detTarifas" ${tarifasAbiertas?"open":""}><summary><b>Tarifas y criterios</b> (se guardan y se usan en todos los expedientes)</summary>
     <p class="hint">Son valores de partida. Ajústalos a tus honorarios y a las tasas de cada ayuntamiento.</p>
     <h3>Honorarios</h3><div class="grid">${hon}</div>
     <h3>Tasas, impuestos y gestiones</h3><div class="grid">${ter}</div>
@@ -2084,7 +2225,7 @@ function panelTarifas(){
 }
 function documentoCliente(e, R){
   const p = e.p, T = DB.tarifas;
-  const fila = l=>`<tr><td>${esc(l.concepto)}</td><td style="text-align:right">${+(+l.cant).toFixed(2)} ${l.ud==="ud"?"":esc(l.ud)}</td><td style="text-align:right">${eur(l.precio)}</td><td style="text-align:right">${eur(l.imp)}</td></tr>`;
+  const fila = l=>`<tr><td>${esc(l.concepto)}</td><td style="text-align:right">${(+l.cant||0).toLocaleString("es-ES",{maximumFractionDigits:2})} ${l.ud==="ud"?"":esc(l.ud)}</td><td style="text-align:right">${eur(l.precio)}</td><td style="text-align:right">${eur(l.imp)}</td></tr>`;
   const bloque = (tit,g)=>{ const ls=R.lineas.filter(l=>l.grupo===g&&!l.off); return ls.length?`<h3>${tit}</h3><table class="t"><tr><th style="width:auto">Concepto</th><th style="width:auto;text-align:right">Cantidad</th><th style="width:auto;text-align:right">Precio</th><th style="width:auto;text-align:right">Importe</th></tr>${ls.map(fila).join("")}</table>`:""; };
   const edTxt = e.edif.filter(x=>x.tipo==="legalizar").map(x=>"<li>"+esc(x.nombre||x.uso)+(x.superficie?", "+esc(x.superficie)+" m2":"")+(x.descripcion?": "+esc(x.descripcion):"")+"</li>").join("");
   return `<div class="onlyprint" id="presPrint">
@@ -2092,7 +2233,7 @@ function documentoCliente(e, R){
     <table class="t">
       <tr><th>Cliente</th><td>${esc(e.cliente)||"-"}</td></tr>
       <tr><th>Referencia</th><td>${esc(e.ref)||"-"}</td></tr>
-      <tr><th>Fecha</th><td>${esc(new Date().toISOString().slice(0,10))}</td></tr>
+      <tr><th>Fecha</th><td>${esc(fechaES(fechaLocal()))}</td></tr>
       <tr><th>Ubicación</th><td>${esc(p.direccion)||"-"}${p.municipio?", "+esc(p.municipio):""}</td></tr>
       ${p.rc?`<tr><th>Referencia catastral</th><td>${esc(p.rc)}</td></tr>`:""}
       ${T.textos.emisor?`<tr><th>Emisor</th><td>${esc(T.textos.emisor)}</td></tr>`:""}
@@ -2126,12 +2267,28 @@ function pintarPresupuesto(){
       ${R.lineas.length?"":'<p class="hint">Sin partidas todavía.</p>'}</div>
     ${panelTarifas()}
   </div>${documentoCliente(e,R)}`;
+  const det = $("#detTarifas"); if(det) det.addEventListener("toggle", ()=>{ tarifasAbiertas = det.open; });
+}
+// Repinta el presupuesto tras un cambio sin perder la posición ni el campo al que se pasa
+function repintarPresupuesto(){
+  setTimeout(()=>{
+    const a = document.activeElement, y = window.scrollY;
+    let sel = null;
+    if(a && a.closest && a.closest("#presupuesto") && window.CSS && CSS.escape){
+      if(a.dataset.pk) sel = `[data-pk="${CSS.escape(a.dataset.pk)}"][data-pf="${CSS.escape(a.dataset.pf)}"]`;
+      else if(a.dataset.tp) sel = `[data-tp="${CSS.escape(a.dataset.tp)}"]`;
+      else if(a.dataset.tt) sel = `[data-tt="${CSS.escape(a.dataset.tt)}"]`;
+    }
+    pintarPresupuesto();
+    window.scrollTo(0, y);
+    if(sel){ const n = $("#presupuesto").querySelector(sel); if(n){ try{ n.focus({preventScroll:true}); }catch(_){ n.focus(); } } }
+  }, 0);
 }
 const tPres = $("#presupuesto");
 tPres.addEventListener("change", ev=>{
   const el = ev.target, e = E(), P = presDe(e);
-  if(el.dataset.tp){ setPath(DB.tarifas, el.dataset.tp, num(el.value)); guardar(); pintarPresupuesto(); return; }
-  if(el.dataset.tt){ setPath(DB.tarifas, el.dataset.tt, el.value); guardar(); pintarPresupuesto(); return; }
+  if(el.dataset.tp){ setPath(DB.tarifas, el.dataset.tp, num(el.value)); guardar(); repintarPresupuesto(); return; }
+  if(el.dataset.tt){ setPath(DB.tarifas, el.dataset.tt, el.value); guardar(); repintarPresupuesto(); return; }
   const k = el.dataset.pk; if(!k) return;
   if(k.startsWith("x:")){
     const x = P.extra.find(z=>"x:"+z.id===k); if(!x) return;
@@ -2147,13 +2304,14 @@ tPres.addEventListener("change", ev=>{
     else if(el.dataset.pf==="cant") o.cant = num(el.value);
     else if(el.dataset.pf==="precio") o.precio = num(el.value);
   }
-  guardar(); pintarPresupuesto();
+  guardar(); repintarPresupuesto();
 });
 tPres.addEventListener("click", ev=>{
   const b = ev.target.closest("button"); if(!b) return;
   const P = presDe(E());
   if(b.id==="btnPrintPres") window.print();
   else if(b.id==="btnAddPart"){ P.extra.push({id:uid(), grupo:"hon", concepto:"Nueva partida", cant:1, precio:0}); guardar(); pintarPresupuesto(); }
+  else if(b.dataset.preset){ const o = P.over[b.dataset.preset]; if(o){ delete o.cant; delete o.precio; } guardar(); pintarPresupuesto(); }
   else if(b.dataset.pdel){ P.extra = P.extra.filter(x=>x.id!==b.dataset.pdel); delete P.over["x:"+b.dataset.pdel]; guardar(); pintarPresupuesto(); }
 });
 
@@ -2161,6 +2319,8 @@ tPres.addEventListener("click", ev=>{
    ARRANQUE
    ================================================================ */
 cargar(); pintarSelector(); volcarFormulario(); pintarEdif();
+// pide al navegador que no borre los datos guardados por falta de espacio o por no usar la app unos días
+try{ if(navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(()=>{}); }catch(_){}
 </script>
 </body>
 </html>

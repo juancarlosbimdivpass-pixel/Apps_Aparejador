@@ -22,7 +22,7 @@
 
 ## App 01: Legalizacion_Viviendas
 Evalúa en el lugar si una vivienda en una parcela puede legalizarse en Canarias.
-- Archivo: `01_Legalizacion_Viviendas/Legalizacion_Viviendas.html`. La versión se muestra en pantalla junto al título (ahora "v4"); subir ese número en cada versión.
+- Archivo: `01_Legalizacion_Viviendas/Legalizacion_Viviendas.html`. La versión se muestra en pantalla junto al título (ahora "v5"); subir ese número en cada versión.
 - Un solo HTML con **Leaflet 1.9.4 incrustado** (CSS y JS dentro del propio archivo). Editar el HTML directamente y no tocar el bloque de Leaflet.
 - Datos en `localStorage` (clave `legalizacion_expedientes_v1`), con exportar e importar JSON por expediente. No cambiar la estructura de datos sin migración, para no perder expedientes.
 - Pestañas: 1 Expediente, 2 Visor, 3 Edificaciones, 4 Informe, 5 Presupuesto.
