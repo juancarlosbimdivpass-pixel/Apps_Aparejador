@@ -747,12 +747,15 @@ tr.selrow td{background:#e7f3e8}
 .sug button{border-color:var(--pri);color:var(--pri)}
 .links a{display:inline-block;margin:2px 10px 2px 0}
 .status{font-size:13px;margin-top:6px}
+.tscroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 @media print{.nover{display:none}
   header.top,nav.tabs,.noprint,button{display:none!important}
   body{background:#fff}
   section.tab{display:none!important}
   section.tab.on{display:block!important}
-  .card{border:0;padding:0;break-inside:avoid}
+  .card{border:0;padding:0;break-inside:auto}
+  .chk,tr,.box{break-inside:avoid}
+  h2,h3{break-after:avoid}
   main{padding:0;max-width:none}
   .onlyscreen{display:none!important}
 }
@@ -817,13 +820,18 @@ nav.tabs .sh{display:none}
   table.pres td:nth-child(7){grid-column:1;grid-row:2/4}
   table.pres td:nth-child(7):empty{display:none}
   table.pres input[type=checkbox]{width:22px;height:22px}
+  table.pres td:nth-child(3)::before{content:"Cantidad"}
+  table.pres td:nth-child(5)::before{content:"Precio unitario (EUR)"}
+  table.pres td:nth-child(3)::before,table.pres td:nth-child(5)::before{display:block;font-size:12px;color:var(--mut);font-weight:600;margin-bottom:2px}
+  #tbInm table.t{font-size:13px}
+  #tbInm table.t td,#tbInm table.t th{padding:5px 4px}
 }
 </style>
 </head>
 <body>
 
 <header class="top">
-  <h1>Legalización de viviendas <small class="nover" style="font-weight:400;opacity:.6;font-size:12px">v5</small></h1>
+  <h1>Legalización de viviendas <small class="nover" style="font-weight:400;opacity:.6;font-size:12px">v6</small></h1>
   <select id="selExp" title="Expediente"></select>
   <button id="btnNuevo">Nuevo expediente</button>
   <button id="btnExport">Exportar</button>
@@ -1149,23 +1157,23 @@ const TAGS = [
     {id:"t_amp_par", t:"Cuadro de parámetros: ocupación, edificabilidad, altura, retranqueos", n:"Contraste con el planeamiento; en fuera de ordenación no se admite aumento de volumen."},
     {id:"t_amp_fecha", t:"Fechar por separado la parte original y la ampliada", n:"Cada obra prescribe por su fecha de terminación."}
   ]},
-  {k:"aperos", re:/aperos|almac[eé]n|trastero|cuarto|caseta|cobertizo|granero/i, label:"Anexo, almacén o cuarto de aperos", docs:[
+  {k:"aperos", re:/aperos|almac[eé]n|trastero|cuarto (agr[ií]cola|de herramientas)|caseta|cobertizo|granero/i, label:"Anexo, almacén o cuarto de aperos", docs:[
     {id:"t_ap_expl", t:"Vinculación a explotación agrícola o ganadera", n:"Cultivos, registro de explotación o certificación; uso agrario, no residencial."},
     {id:"t_ap_uso", t:"Justificar que el uso es admisible en la categoría de suelo", n:""}
   ]},
   {k:"garaje", re:/garaje|cochera|aparcamiento/i, label:"Garaje", docs:[
     {id:"t_gar", t:"Justificar uso, superficie y vinculación a la vivienda principal", n:""}
   ]},
-  {k:"porche", re:/porche|p[eé]rgola|terraza|cubierta|marquesina|toldo/i, label:"Porche, pérgola o cubierta", docs:[
+  {k:"porche", re:/porche|p[eé]rgola|terraza|marquesina|toldo|techad|cubierta (ligera|exterior|de (madera|chapa|panel|lona|policarbonato))/i, label:"Porche, pérgola o cubierta", docs:[
     {id:"t_por", t:"Superficie computable y parámetros de ocupación", n:"Elementos cerrados o con cubierta fija pueden computar."}
   ]},
   {k:"invernadero", re:/invernadero|umbr[aá]culo/i, label:"Invernadero", docs:[
     {id:"t_inv", t:"Vinculación a la explotación y régimen de uso agrario", n:""}
   ]},
-  {k:"muro", re:/muro|cerramiento|vallado|cerca\b|tapia/i, label:"Muro o cerramiento", docs:[
+  {k:"muro", re:/muro (de )?(cerramiento|perimetral|de linde|de contenci)|muro de (la )?(parcela|finca)|cerramiento (de|perimetral de) (la )?(parcela|finca)|vallado|\bcerca\b|\btapia/i, label:"Muro o cerramiento", docs:[
     {id:"t_muro", t:"Altura, material, alineación y retranqueos de cerramientos", n:"Distancia a caminos y carreteras."}
   ]},
-  {k:"fosa", re:/fosa|s[eé]ptic|saneamiento|depuradora/i, label:"Saneamiento", docs:[
+  {k:"fosa", re:/fosa|s[eé]ptic|pozo (negro|absorbente)|depuradora (de aguas residuales|compacta|biol[oó]gica)|oxidaci[oó]n total|vertido/i, label:"Saneamiento", docs:[
     {id:"t_fosa", t:"Autorización de vertido y justificación del sistema de saneamiento", n:""}
   ]}
 ];
@@ -1406,11 +1414,12 @@ const norm = s => String(s||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toUpperC
 const provinciaDe = isla => ["Gran Canaria","Lanzarote","Fuerteventura"].includes(isla) ? "LAS PALMAS" : "S.C. TENERIFE";
 // Errores de conexión marcados con "red": así no se confunden con un fallo del propio programa
 function errRed(msg){ const e = new Error(msg); e.red = true; return e; }
+const errHttp = st => new Error(st>=500 ? "El Catastro no está respondiendo bien ahora mismo (error "+st+"). Inténtalo de nuevo en unos minutos." : "El Catastro ha rechazado la consulta (error "+st+").");
 const MSG_LENTO = "El Catastro tarda demasiado en responder. Inténtalo de nuevo.";
 function xhrText(url){
   return new Promise((res,rej)=>{
     const x = new XMLHttpRequest(); x.open("GET",url); x.timeout = 40000;
-    x.onload = ()=> (x.status>=200 && x.status<300) ? res(x.responseText) : rej(new Error("El Catastro respondió con error "+x.status+"."));
+    x.onload = ()=> (x.status>=200 && x.status<300) ? res(x.responseText) : rej(errHttp(x.status));
     x.onerror = ()=> rej(errRed("XHR bloqueado"));
     x.ontimeout = ()=> rej(new Error(MSG_LENTO));
     x.send();
@@ -1421,7 +1430,7 @@ async function httpText(url){
   const intento = async ()=>{
     try{
       const r = await fetch(url);                       // sin opciones: algunos entornos no admiten AbortSignal ni otras opciones
-      if(!r.ok) throw new Error("El Catastro respondió con error "+r.status+".");
+      if(!r.ok) throw errHttp(r.status);
       return await r.text();
     }catch(e){
       const red = e instanceof TypeError || /postMessage|cloned|Failed to fetch|NetworkError|Load failed/i.test((e&&e.message)||"");
@@ -1443,6 +1452,7 @@ function msgError(err){
   return (err && err.message) || "Error desconocido al consultar el Catastro.";
 }
 function errCat(c){ if(!c||!c.lerr) return null; const l = Array.isArray(c.lerr) ? c.lerr : arr(c.lerr.err); return l.length ? {cod:l[0].cod, des:String(l[0].des||"")} : null; }
+function findKey(o,k){ if(!o||typeof o!=="object") return ""; if(typeof o[k]==="string") return o[k]; for(const x in o){ const r=findKey(o[x],k); if(r) return r; } return ""; }
 function findLdt(o){ if(!o||typeof o!=="object") return ""; if(typeof o.ldt==="string") return o.ldt; for(const k in o){ const r=findLdt(o[k]); if(r) return r; } return ""; }
 
 function sugerencias(titulo, items){
@@ -1476,10 +1486,26 @@ async function munCat(){
     if(!l.length) throw new Error("El Catastro no ha devuelto la lista de municipios. Inténtalo de nuevo en unos minutos.");
     cache.mun[prov] = l;
   }
-  const list = cache.mun[prov], n = norm(p.municipio), sa = s=>s.replace(/^(EL|LA|LOS|LAS) /,"");
-  const hit = list.find(x=>norm(x)===n) || list.find(x=>sa(norm(x))===sa(n)) || list.find(x=>norm(x).startsWith(n)||n.startsWith(norm(x)));
+  const hit = buscarMun(p.municipio, cache.mun[prov]);
   if(!hit) throw new Error("No encuentro "+p.municipio+" en el Catastro.");
   return {prov, mun:hit};
+}
+// Comparación de nombres de municipio tolerante a artículos ("EL PASO", "PASO (EL)") y nombres abreviados ("VILAFLOR")
+const normMun = s => norm(String(s||"").replace(/\s*\((el|la|los|las)\)\s*$/i,"")).replace(/^(EL|LA|LOS|LAS) /,"");
+function buscarMun(nombre, lista){
+  const n = norm(nombre), na = normMun(nombre);
+  return lista.find(x=>norm(x)===n) || lista.find(x=>normMun(x)===na)
+    || lista.find(x=>{ const y = normMun(x); return y.length>=4 && na.length>=4 && (y.startsWith(na)||na.startsWith(y)); });
+}
+// Pone isla y municipio del expediente según el municipio que da el Catastro para la parcela
+function fijarMunicipio(p, nm, np){
+  if(!nm) return false;
+  const lp = /PALMAS/i.test(np||""), islas = Object.keys(MUNICIPIOS).filter(i=>!np || (provinciaDe(i)==="LAS PALMAS")===lp);
+  const todos = []; islas.forEach(i=>{ const m=MUNICIPIOS[i]; [...m.primeros,...m.resto].forEach(x=>todos.push(x)); });
+  const hit = buscarMun(nm, todos);
+  if(!hit) return false;
+  p.isla = islas.find(i=>[...MUNICIPIOS[i].primeros,...MUNICIPIOS[i].resto].includes(hit)); p.municipio = hit;
+  return true;
 }
 async function callejero(prov, mun){
   const k = prov+"|"+mun;
@@ -1650,10 +1676,11 @@ async function cargarGeom(rc){
 async function detalleRC(rc){
   const d = (await getJSON(CAT_JSON+"Consulta_DNPRC?Provincia=&Municipio=&RefCat="+enc(rc))).consulta_dnprcResult || {};
   const inms = inmueblesDe(d), b = d.bico;
-  if(!b) return {n:inms.length, inms, ldt:findLdt(d) || (inms[0] ? [inms[0].via, inms[0].rus].filter(Boolean).join(" ") : ""), err:errCat(d)};
+  const nm = findKey(d,"nm"), np = findKey(d,"np");
+  if(!b) return {n:inms.length, inms, ldt:findLdt(d) || (inms[0] ? [inms[0].via, inms[0].rus].filter(Boolean).join(" ") : ""), err:errCat(d), nm, np};
   const bi = b.bi||{}, de = bi.debi||{}, fi = b.finca||{};
   const cons = arr(b.lcons).filter(Boolean).map(c=>({lcd:c.lcd, sup:(c.dfcons||{}).stl, tipo:(c.dvcons||{}).dtip}));
-  return {n:1, inms, ldt:bi.ldt||fi.ldt||"", uso:de.luso, sfc:de.sfc, ant:de.ant, ss:(fi.dff||{}).ss, cons, sede:(fi.infgraf||{}).igraf};
+  return {n:1, inms, ldt:bi.ldt||fi.ldt||"", uso:de.luso, sfc:de.sfc, ant:de.ant, ss:(fi.dff||{}).ss, cons, sede:(fi.infgraf||{}).igraf, nm, np};
 }
 async function aplicarRC(rc){
   rc = rc.slice(0,14).toUpperCase(); const e0 = E(), p = e0.p;
@@ -1674,6 +1701,8 @@ async function aplicarRC(rc){
   p.geom = hayG ? g.rings : null;
   if(det){ p.catastro = {...det}; delete p.catastro.inms; const ldt = String(det.ldt||"").replace(/\s+/g," ").trim(); if(ldt) p.direccion = ldt; }
   else p.catastro = {n:0};
+  p.catastro.rc = rc;   // referencia a la que corresponden estos datos
+  const munAntes = p.municipio, munOk = det && fijarMunicipio(p, det.nm, det.np);
   const sup = (det && det.ss) || (g && g.area); if(sup) p.superficie = String(sup);
   if(p.geom){
     const pts = p.geom[0];
@@ -1682,7 +1711,8 @@ async function aplicarRC(rc){
   }
   guardar();
   if(E()===e0){ volcarFormulario(); actualizarMarcador(); if(mapas.L) dibujarParcela(true); }
-  catMsg(p.geom ? "Parcela "+rc+" localizada." : "Parcela "+rc+" localizada, pero no se pudo cargar su contorno.", "ok");
+  const enMun = munOk && p.municipio!==munAntes ? " Municipio: "+p.municipio+"." : "";
+  catMsg((p.geom ? "Parcela "+rc+" localizada." : "Parcela "+rc+" localizada, pero no se pudo cargar su contorno.")+enMun, "ok");
   return det || {n:0, inms:[]};
 }
 
@@ -1716,10 +1746,12 @@ function pintarListaInm(){
 function pintarTablaInm(){
   const t = $("#tbInm"); if(!t) return;
   const sel = E().p.rc20, q = norm(INM.q);
-  const filt = INM.lista.filter(x=>(!INM.uso || (x.uso||"Sin uso")===INM.uso) && (!q || norm([x.esc,planta(x.pt),x.pu,x.uso].join(" ")).includes(q)));
+  const sitio = x=>[x.esc?"Esc. "+x.esc:"", x.pt!==""&&x.pt!=null?"Pl. "+planta(x.pt):"", x.pu?"Pta. "+x.pu:""].filter(Boolean).join(", ");
+  const filt = INM.lista.filter(x=>(!INM.uso || (x.uso||"Sin uso")===INM.uso) && (!q || norm([sitio(x),x.uso].join(" ")).includes(q)));
   const vis = filt.slice(0,INM.max);
-  t.innerHTML = `<table class="t"><tr><th style="width:auto">Uso</th><th style="width:auto">Esc.</th><th style="width:auto">Planta</th><th style="width:auto">Puerta</th><th style="width:auto">m2</th><th style="width:auto">Año</th><th style="width:auto"></th></tr>`+
-    vis.map(x=>`<tr class="${x.rc20&&x.rc20===sel?"selrow":""}"><td>${esc(x.uso)}</td><td>${esc(x.esc)}</td><td>${esc(planta(x.pt))}</td><td>${esc(x.pu)}</td><td>${esc(x.sfc)}</td><td>${esc(x.ant)}</td><td>${x.rc20&&x.rc20===sel?"Seleccionado":`<button data-rc20="${esc(x.rc20)}">Seleccionar</button>`}</td></tr>`).join("")+`</table>`+
+  // el botón va primero para que se vea sin deslizar en el móvil; escalera, planta y puerta en una sola columna
+  t.innerHTML = `<div class="tscroll"><table class="t"><tr><th style="width:auto"></th><th style="width:auto">Uso</th><th style="width:auto">Situación</th><th style="width:auto">m2</th><th style="width:auto">Año</th></tr>`+
+    vis.map(x=>`<tr class="${x.rc20&&x.rc20===sel?"selrow":""}"><td>${x.rc20&&x.rc20===sel?"<b>Elegido</b>":`<button data-rc20="${esc(x.rc20)}">Elegir</button>`}</td><td>${esc(x.uso)}</td><td>${esc(sitio(x))}</td><td>${esc(x.sfc)}</td><td>${esc(x.ant)}</td></tr>`).join("")+`</table></div>`+
     (filt.length>vis.length?`<div class="row" style="margin-top:6px"><span class="hint">Mostrando ${vis.length} de ${filt.length}</span><button id="btnMasInm">Mostrar más</button></div>`:(filt.length?`<div class="hint" style="margin-top:6px">${filt.length} inmuebles</div>`:`<div class="hint">Ningún inmueble coincide con el filtro.</div>`));
   t.querySelectorAll("[data-rc20]").forEach(b=>b.onclick = ()=>{ const x = INM.lista.find(i=>i.rc20===b.dataset.rc20); if(x) elegirInmueble(x); });
   const m = $("#btnMasInm"); if(m) m.onclick = ()=>{ INM.max+=40; pintarTablaInm(); };
@@ -1766,14 +1798,18 @@ function leerCoordenadas(t){
   try{ t = decodeURIComponent(t); }catch(e){}
   t = t.replace(/[\u2032\u2019\u00b4]/g,"'").replace(/[\u2033\u201d]/g,'"').replace(/\u00ba/g,"\u00b0");
   const num = x=>parseFloat(String(x).replace(",","."));
-  // grados, minutos, segundos: 28°24'18.9"N 16°31'15.5"W
-  const dms = [...t.matchAll(/(\d{1,3})\s*\u00b0\s*(?:(\d{1,2})\s*'\s*)?(?:(\d{1,2}(?:[.,]\d+)?)\s*(?:"|'')\s*)?([NSEWO])/gi)];
+  const g = (gr,mi,se,h)=>{ const v=num(gr)+(mi?num(mi)/60:0)+(se?num(se)/3600:0); h=h.toUpperCase(); return (h==="S"||h==="W"||h==="O")?-v:v; };
+  // con símbolo de grados: 28°24'18.9"N 16°31'15.5"W, o grados decimales como los da Apple Maps: 28,40525° N, 16,52097° O
+  // (el grupo inicial impide empezar a leer a mitad de un número)
+  const dms = [...t.matchAll(/(?:^|[^\d.,])(\d{1,3}(?:[.,]\d+)?)\s*\u00b0\s*(?:(\d{1,2}(?:[.,]\d+)?)\s*'\s*)?(?:(\d{1,2}(?:[.,]\d+)?)\s*(?:"|'')\s*)?([NSEWO])/gi)];
   if(dms.length>=2){
-    const g = m=>{ let v=num(m[1])+(m[2]?num(m[2])/60:0)+(m[3]?num(m[3])/3600:0); const h=m[4].toUpperCase(); return (h==="S"||h==="W"||h==="O")?-v:v; };
-    const a=dms.map(m=>({v:g(m),h:m[4].toUpperCase()}));
+    const a=dms.map(m=>({v:g(m[1],m[2],m[3],m[4]),h:m[4].toUpperCase()}));
     const la=a.find(x=>x.h==="N"||x.h==="S"), lo=a.find(x=>x.h==="E"||x.h==="W"||x.h==="O");
     if(la&&lo) return {lat:la.v, lon:lo.v};
   }
+  // grados, minutos y segundos sin símbolos: 28 24 18.9 N 16 31 15.5 W
+  let s3 = t.match(/(\d{1,3})\s+(\d{1,2})\s+(\d{1,2}(?:[.,]\d+)?)\s*([NS])[\s,;]+(\d{1,3})\s+(\d{1,2})\s+(\d{1,2}(?:[.,]\d+)?)\s*([EWO])/i);
+  if(s3) return {lat:g(s3[1],s3[2],s3[3],s3[4]), lon:g(s3[5],s3[6],s3[7],s3[8])};
   // enlace de Google Maps: punto marcado (!3d..!4d..) o centro (@lat,lon)
   let m = t.match(/!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/) || t.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/) || t.match(/[?&](?:q|ll|query)=(-?\d+(?:\.\d+)?)[, ]+(-?\d+(?:\.\d+)?)/);
   if(m) return {lat:num(m[1]), lon:num(m[2])};
@@ -1782,11 +1818,16 @@ function leerCoordenadas(t){
   if(m) return {lat:num(m[1]), lon:num(m[2])};
   return null;
 }
+// Mensaje cuando no se reconocen las coordenadas (los enlaces cortos de compartir no llevan el punto)
+function msgCoordNo(t){
+  if(/goo\.gl|maps\.app|maps\.apple\/p\//i.test(t||"")) return "Ese enlace corto no incluye las coordenadas. En Google Maps mantén pulsado el punto: arriba aparecen las coordenadas; cópialas y pégalas aquí.";
+  return "No reconozco las coordenadas. Pega el texto tal como lo copias de Google Maps (por ejemplo 28.4052, -16.5216).";
+}
 function pintarCoord(){ const p=E().p, el=$("#inCoord"); if(el && document.activeElement!==el) el.value = (p.lat&&p.lon) ? p.lat+", "+p.lon : ""; }
 async function buscarCoo(txt){
   sugerencias(); $("#listaInm").innerHTML="";
   const c = leerCoordenadas(typeof txt==="string" ? txt : $("#inCoo").value);
-  if(!c || !isFinite(c.lat) || !isFinite(c.lon)){ catMsg("No reconozco las coordenadas. Pega el texto tal como lo copias de Google Maps.","warn"); return; }
+  if(!c || !isFinite(c.lat) || !isFinite(c.lon)){ catMsg(msgCoordNo(typeof txt==="string" ? txt : $("#inCoo").value),"warn"); return; }
   const enCanarias = (la,lo)=> la>=27 && la<=29.6 && lo>=-18.4 && lo<=-13.2;
   if(!enCanarias(c.lat,c.lon) && enCanarias(c.lon,c.lat)){ const t=c.lat; c.lat=c.lon; c.lon=t; }   // pegadas al revés (longitud, latitud)
   else if(!enCanarias(c.lat,c.lon) && enCanarias(c.lat,-c.lon)) c.lon = -c.lon;                      // sin el signo menos de la longitud
@@ -1805,6 +1846,7 @@ async function probarConexion(){
   const t = async (nom, fn)=>{ try{ await fn(); res.push(nom+": correcto"); }catch(e){ ok=false; res.push(nom+": FALLA ("+(e.message||e.name)+")"); } };
   await t("Catastro, callejero", ()=>getJSON(CAT_JSON+"ObtenerProvincias"));
   await t("Catastro, contorno de parcelas", ()=>httpText(WFS_CP+"5767102CS6356N"));
+  await t("Catastro, coordenadas", ()=>coordARC("28.4052500","-16.5209722"));
   await t("GRAFCAN, ortofotos", ()=>new Promise((ok,ko)=>{ const im=new Image(); im.onload=ok; im.onerror=()=>ko(new Error("imagen bloqueada")); im.src="https://idecan1.grafcan.es/ServicioWMS/OrtoExpress?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ortoexpress&STYLES=&CRS=EPSG:3857&BBOX=-1822400,3290200,-1821900,3290700&WIDTH=64&HEIGHT=64&FORMAT=image/jpeg"; }));
   catMsg(res.join(" | ")+(ok?"":". Si falla, abre el archivo directamente en Safari o Chrome en lugar de la vista previa."), ok?"ok":"err");
 }
@@ -1824,11 +1866,28 @@ $("#btnBuscarCoo").onclick = ()=>bCoo();
 (function(){ const el=$("#inCoord"); let t=null, ultimo="";
   const buscar = unaVez(buscarCoo);
   // "ultimo" evita repetir la misma búsqueda al pegar y luego salir del campo (pegar + change)
-  const lanzar=()=>{ const v=el.value.trim(); if(!v || v===ultimo) return; if(!leerCoordenadas(v)){ catMsg("No reconozco las coordenadas. Pega el texto tal como lo copias de Google Maps.","warn"); return; } ultimo=v; buscar(v); };
+  const lanzar=()=>{ const v=el.value.trim(); if(!v || v===ultimo) return; if(!leerCoordenadas(v)){ catMsg(msgCoordNo(v),"warn"); return; } ultimo=v; buscar(v); };
   el.addEventListener("focus",()=>{ ultimo=""; });
   el.addEventListener("paste",()=>{ clearTimeout(t); t=setTimeout(lanzar,50); });
   el.addEventListener("keydown",e=>{ if(e.key==="Enter"){ e.preventDefault(); lanzar(); } });
   el.addEventListener("change",lanzar);
+})();
+// Referencia de la parcela escrita a mano en "Datos de la finca": se quitan los datos de la parcela anterior y se busca la nueva
+(function(){ const el=$("#inRC"); let previo="";
+  const buscar = unaVez(async rc=>{ await seleccionarParcela(rc); });
+  el.addEventListener("focus",()=>{ previo = E().p.rc||""; });
+  el.addEventListener("change",()=>{
+    const p = E().p, v = String(el.value||"").toUpperCase().replace(/[^0-9A-Z]/g,"");
+    p.rc = v; el.value = v;
+    const cargada = (p.catastro && p.catastro.rc) || previo;
+    if(v===cargada) return;
+    if(p.catastro || p.geom){   // solo si venían del Catastro; si se escribieron a mano, se respetan
+      p.rc20=""; p.inmueble=null; p.catastro=null; p.geom=null; p.direccion=""; p.superficie="";
+    }
+    guardar(); limpiarBusqueda(); volcarFormulario(); if(mapas.L) dibujarParcela(false);
+    if(v.length===14) buscar(v);
+    else if(v) catMsg("La referencia catastral de la parcela tiene 14 caracteres.","warn");
+  });
 })();
 $("#inCoo").addEventListener("keydown",e=>{ if(e.key==="Enter") bCoo(); });
 $("#btnTestCat").onclick = unaVez(probarConexion);
@@ -2080,7 +2139,7 @@ function pintarInforme(){
         <tr><th>Cliente</th><td>${esc(e.cliente)||"-"} ${e.contacto?"("+esc(e.contacto)+")":""}</td></tr>
         <tr><th>Fecha del encargo</th><td>${esc(fechaES(e.fecha))||"-"}</td></tr>
         <tr><th>Encargo</th><td>${esc(e.encargo)||"-"}</td></tr>
-        <tr><th>Ubicación</th><td>${esc(p.direccion)||"-"}, ${esc(p.municipio)||"-"} (${esc(p.isla)})</td></tr>
+        <tr><th>Ubicación</th><td>${esc([p.direccion, p.municipio].filter(Boolean).join(", ")||"-")}${p.isla?" ("+esc(p.isla)+")":""}</td></tr>
         <tr><th>Referencia catastral (parcela)</th><td>${esc(p.rc)||"-"}</td></tr>
         ${p.rc20?`<tr><th>Inmueble</th><td>${esc(p.rc20)}${p.inmueble?" ("+esc([p.inmueble.uso, p.inmueble.pt!==""&&p.inmueble.pt!=null?"planta "+planta(p.inmueble.pt):"", p.inmueble.pu?"puerta "+p.inmueble.pu:"", p.inmueble.sfc?p.inmueble.sfc+" m2":""].filter(Boolean).join(", "))+")":""}</td></tr>`:""}
         <tr><th>Coordenadas</th><td>${p.lat&&p.lon?esc(p.lat)+", "+esc(p.lon):"-"}</td></tr>

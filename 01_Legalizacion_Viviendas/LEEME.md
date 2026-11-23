@@ -9,7 +9,15 @@ Evalúa en el lugar si una vivienda en una parcela puede legalizarse en Canarias
 4. **Informe**: normativa aplicable y documentación a presentar.
 5. **Presupuesto**: honorarios, IGIC 7 %, tasas y horquilla, imprimible para el cliente.
 
-## Versión actual: v5 (revisión de errores)
+## Versión actual: v6 (pruebas a fondo)
+- El municipio y la isla se rellenan solos con los del Catastro al localizar la parcela.
+- Coordenadas: admite el formato de Apple Maps en español (28,40525° N, 16,52097° O) y grados sin símbolos; aviso claro con los enlaces cortos de compartir, que no llevan coordenadas.
+- Escribir a mano otra referencia en "Datos de la finca" carga la nueva parcela y quita los datos de la anterior.
+- Detección por palabras clave más precisa: "cuarto de baño", "cubierta", "muros de carga", "saneamiento" o la depuradora de la piscina ya no añaden documentos ni suplementos que no tocan.
+- Tabla de inmuebles adaptada al móvil; en el presupuesto del móvil se indica qué es cantidad y qué es precio.
+- Informe impreso sin huecos en blanco entre páginas; "Probar conexión" comprueba también el servicio de coordenadas.
+
+## v5 (revisión de errores)
 - Los datos de una parcela anterior ya no se mezclan al buscar otra; al cambiar de expediente se limpian los resultados y el visor.
 - Edificaciones: se guarda mientras se escribe y no se cierra el teclado del móvil al pasar de campo.
 - Presupuesto: el panel de tarifas no se cierra al cambiar un valor; botón para volver al valor calculado; el visado sigue los cambios del proyecto; el mínimo de tarifa se respeta.
